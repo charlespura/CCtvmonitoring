@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Local camera credentials — never commit these
+rtsp-config.json
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime output
+snapshots/
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
