@@ -73,7 +73,7 @@ Tapo cameras **block** third-party apps by default. Open the **Tapo app** on you
    > ⚠️ This is **not** your TP-Link/Tapo cloud login. It's a separate account just for the camera.
 
 3. **Write down the camera's IP address**
-   Tap your camera → ⚙️ **Settings** → **Device Info** → **IP Address** (for example `192.168.1.229`).
+   Tap your camera → ⚙️ **Settings** → **Device Info** → **IP Address** (for example `192.168.1.100`).
 
 4. **Make sure Privacy Mode is off.** If it's on, the video will be blank.
 
@@ -145,7 +145,7 @@ Open **`rtsp-config.json`** in any text editor and fill in your values from Step
 
 ```json
 {
-  "camera_ip": "192.168.1.229",
+  "camera_ip": "192.168.1.100",
   "rtsp_port": 554,
   "rtsp_username": "your-camera-account-username",
   "rtsp_password": "your-camera-account-password",
@@ -164,11 +164,11 @@ Open **`rtsp-config.json`** in any text editor and fill in your values from Step
 
 ```bash
 # macOS / Linux
-nc -z -G 3 192.168.1.229 554 && echo "✅ RTSP is open" || echo "❌ RTSP is closed"
+nc -z -G 3 192.168.1.100 554 && echo "✅ RTSP is open" || echo "❌ RTSP is closed"
 ```
 ```powershell
 # Windows
-Test-NetConnection 192.168.1.229 -Port 554     # look for: TcpTestSucceeded : True
+Test-NetConnection 192.168.1.100 -Port 554     # look for: TcpTestSucceeded : True
 ```
 
 If it's closed, repeat **Step 1** (Third-Party Compatibility + Camera Account) and check the IP.
@@ -176,7 +176,7 @@ If it's closed, repeat **Step 1** (Third-Party Compatibility + Camera Account) a
 **b) Do the username and password work?**
 
 ```bash
-ffprobe -v error -rtsp_transport tcp "rtsp://USERNAME:PASSWORD@192.168.1.229:554/stream1"
+ffprobe -v error -rtsp_transport tcp "rtsp://USERNAME:PASSWORD@192.168.1.100:554/stream1"
 ```
 
 No output means it worked ✅. If you get `401 Unauthorized`, the username or password is wrong.
@@ -193,7 +193,7 @@ You should see:
 ```
 🚀 CCTV Monitor running
 📍 Dashboard:  http://localhost:3000
-🎥 RTSP:       rtsp://****:****@192.168.1.229:554/stream1
+🎥 RTSP:       rtsp://****:****@192.168.1.100:554/stream1
 ```
 
 Keep this terminal window open while you use the dashboard. To stop the server, press **Ctrl + C**.
