@@ -30,10 +30,10 @@ DEFAULT_ZONES = {
     "EXIT": {"x1": 320, "y1": 150, "x2": 640, "y2": 350},
 }
 
-# BGR colours
-GREEN = (94, 197, 34)
-RED = (68, 68, 239)
-AMBER = (36, 191, 251)
+# BGR colours — colour-blind-safe pair matching the dashboard
+ENTER_COLOR = (122, 175, 27)    # aqua   #1baf7a
+EXIT_COLOR = (52, 104, 235)     # orange #eb6834
+PERSON_COLOR = (255, 140, 79)   # blue   #4f8cff (person outside both zones)
 
 
 def load_config():
@@ -74,8 +74,8 @@ def detect_people(hog, frame_b64, zones, config):
         frame = cv2.resize(frame, (target_width, int(height * target_width / width)))
 
     annotated = frame.copy()
-    draw_zone(annotated, zones["ENTER"], GREEN, "ENTER")
-    draw_zone(annotated, zones["EXIT"], RED, "EXIT")
+    draw_zone(annotated, zones["ENTER"], ENTER_COLOR, "ENTER")
+    draw_zone(annotated, zones["EXIT"], EXIT_COLOR, "EXIT")
 
     rects, weights = hog.detectMultiScale(frame, winStride=(4, 4), padding=(8, 8), scale=1.05)
     weights = np.asarray(weights).reshape(-1)
@@ -92,7 +92,7 @@ def detect_people(hog, frame_b64, zones, config):
         entering = in_zone(cx, cy, zones["ENTER"], buffer)
         exiting = in_zone(cx, cy, zones["EXIT"], buffer)
 
-        color = GREEN if entering else RED if exiting else AMBER
+        color = ENTER_COLOR if entering else EXIT_COLOR if exiting else PERSON_COLOR
         cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
         cv2.putText(annotated, f"{float(weight):.2f}", (x, max(y - 5, 10)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)

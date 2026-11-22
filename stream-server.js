@@ -4,6 +4,8 @@ const { spawn } = require('child_process');
 const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
+const { Store, dateKey } = require('./lib/store');
+const { createAuth } = require('./lib/auth');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const BIND_ADDRESS = process.env.BIND_ADDRESS || '0.0.0.0';
@@ -50,10 +52,11 @@ const wss = new WebSocket.Server({
     verifyClient: ({ origin, req }) => {
         const ok = isAllowedHost(req.headers.host) && isAllowedOrigin(origin, req.headers.host);
         if (!ok) console.warn(`🚫 Blocked WebSocket from origin=${origin || '-'} host=${req.headers.host || '-'}`);
-        return ok;
+        return ok && auth.isAuthenticated(req);
     }
 });
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const STARTED_AT = Date.now();
 
 // ========== CAMERA CONFIGURATION ==========
@@ -68,7 +71,8 @@ const DEFAULT_RTSP_CONFIG = {
     rtsp_password: '',
     stream_quality: 'stream1',
     rtsp_transport: 'tcp',
-    rtsp_timeout_ms: 5000
+    rtsp_timeout_ms: 5000,
+    dashboard_password: ''
 };
 
 function loadRtspConfig() {
@@ -94,6 +98,7 @@ function loadRtspConfig() {
     config.stream_quality = process.env.RTSP_PATH || config.stream_quality;
     config.rtsp_transport = process.env.RTSP_TRANSPORT || config.rtsp_transport;
     config.rtsp_timeout_ms = parseInt(process.env.RTSP_TIMEOUT_MS || config.rtsp_timeout_ms, 10);
+    config.dashboard_password = process.env.DASHBOARD_PASSWORD || config.dashboard_password;
 
     return config;
 }
@@ -114,6 +119,10 @@ function maskRtspUrl(text) {
 
 const rtspConfig = loadRtspConfig();
 const RTSP_URL = buildRtspUrl(rtspConfig);
+const IS_RTSP = /^rtsps?:\/\//i.test(RTSP_URL); // RTSP_URL may also be a video file for testing
+
+const store = new Store(DATA_DIR);
+const auth = createAuth({ password: rtspConfig.dashboard_password, dataDir: DATA_DIR });
 
 // ========== DETECTION CONFIGURATION ==========
 const CONFIG = {
@@ -122,16 +131,17 @@ const CONFIG = {
     MOVEMENT_THRESHOLD: 100,    // Max pixels a person can move between frames to be matched
     DETECTION_CONFIDENCE: 0.3,  // Minimum HOG confidence
     STREAM_SCALE_WIDTH: parseInt(process.env.STREAM_SCALE_WIDTH || '640', 10),
-    ZONE_BUFFER: 20,            // Buffer around zones to prevent boundary flicker
-    HISTORY_LIMIT: 500          // Events kept in memory
+    ZONE_BUFFER: 20             // Buffer around zones to prevent boundary flicker
 };
 
 // Detection zones in scaled-frame pixel coordinates (width = STREAM_SCALE_WIDTH).
-// Calibrate these for your camera view, or POST new ones to /api/calibrate-zones.
-const ZONES = {
+// Edit them visually with the "Zones" button on the dashboard; they are saved in
+// data/state.json. These defaults are used until then.
+const DEFAULT_ZONES = {
     ENTER: { x1: 0, y1: 150, x2: 320, y2: 350 },
     EXIT: { x1: 320, y1: 150, x2: 640, y2: 350 }
 };
+const ZONES = { ...DEFAULT_ZONES, ...store.zones };
 
 const pythonScriptPath = path.join(__dirname, 'people_detector.py');
 
@@ -151,6 +161,8 @@ app.use((req, res, next) => {
     next();
 });
 app.use(express.json({ limit: '10kb' }));
+auth.register(app);        // /api/session, /api/login, /api/logout
+app.use(auth.middleware);  // everything below needs a session when a password is set
 // Only the public/ folder is served — never the project root (it holds credentials).
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -162,9 +174,6 @@ let lastFfmpegError = null;
 let restartDelay = 3000;
 const clients = new Set();
 
-let enterCount = 0;
-let exitCount = 0;
-let peopleHistory = [];
 let trackedPeople = new Map();
 let nextPersonId = 0;
 let lastFrameAt = null;
@@ -175,14 +184,14 @@ const FFMPEG_ERROR_HINTS = [
 ];
 
 function currentOccupancy() {
-    return Math.max(0, enterCount - exitCount);
+    return Math.max(0, store.counts.enter - store.counts.exit);
 }
 
 function countsPayload() {
     return {
         current: currentOccupancy(),
-        enter: enterCount,
-        exit: exitCount,
+        enter: store.counts.enter,
+        exit: store.counts.exit,
         tracked: trackedPeople.size,
         timestamp: Date.now()
     };
@@ -198,21 +207,10 @@ function broadcast(payload) {
 }
 
 // ========== PEOPLE COUNTING ==========
-function recordEvent(type, det) {
-    if (type === 'ENTER') enterCount++;
-    if (type === 'EXIT') exitCount++;
-
-    const event = {
-        type,
-        time: new Date().toISOString(),
-        position: { x: det.x, y: det.y }
-    };
-    peopleHistory.push(event);
-    if (peopleHistory.length > CONFIG.HISTORY_LIMIT) {
-        peopleHistory = peopleHistory.slice(-CONFIG.HISTORY_LIMIT);
-    }
-
-    console.log(`${type === 'ENTER' ? '✅ ENTER' : '👋 EXIT '} | entered ${enterCount} · exited ${exitCount} · inside ${currentOccupancy()}`);
+function recordEvent(type) {
+    const event = store.recordEvent(type);
+    const { enter, exit } = store.counts;
+    console.log(`${type === 'ENTER' ? '✅ ENTER' : '👋 EXIT '} | entered ${enter} · exited ${exit} · inside ${currentOccupancy()}`);
     broadcast({ type: 'event', data: event, counts: countsPayload() });
 }
 
@@ -244,8 +242,8 @@ function updatePeopleCount(detections) {
             const person = unmatched.get(bestId);
             unmatched.delete(bestId);
             // A zone transition on a known person is what counts as an event
-            if (!person.inEnterZone && det.in_enter_zone) recordEvent('ENTER', det);
-            if (!person.inExitZone && det.in_exit_zone) recordEvent('EXIT', det);
+            if (!person.inEnterZone && det.in_enter_zone) recordEvent('ENTER');
+            if (!person.inExitZone && det.in_exit_zone) recordEvent('EXIT');
             updated.set(bestId, state);
         } else if (det.in_enter_zone || det.in_exit_zone) {
             updated.set(nextPersonId++, state);
@@ -334,6 +332,19 @@ function sendFrameToDetector(jpg) {
     }
 }
 
+// Live RTSP cameras get low-latency input flags; a local video file (handy for
+// testing without a camera) is played in real time and looped.
+function inputArgs() {
+    return IS_RTSP
+        ? [
+            '-rtsp_transport', rtspConfig.rtsp_transport || 'tcp',
+            '-fflags', '+nobuffer+discardcorrupt',
+            '-flags', 'low_delay',
+            '-err_detect', 'ignore_err'
+        ]
+        : ['-re', '-stream_loop', '-1'];
+}
+
 function startFFmpegStream() {
     if (ffmpegProcess) {
         ffmpegProcess.kill('SIGTERM');
@@ -352,10 +363,7 @@ function startFFmpegStream() {
 
     const ffmpeg = spawn('ffmpeg', [
         '-loglevel', 'error',
-        '-rtsp_transport', rtspConfig.rtsp_transport || 'tcp',
-        '-fflags', '+nobuffer+discardcorrupt',
-        '-flags', 'low_delay',
-        '-err_detect', 'ignore_err',
+        ...inputArgs(),
         '-i', RTSP_URL,
         ...scaleArgs,
         '-f', 'image2pipe',
@@ -466,7 +474,8 @@ wss.on('connection', (ws) => {
     }
 
     ws.send(JSON.stringify({ type: 'counts', data: countsPayload() }));
-    ws.send(JSON.stringify({ type: 'history', data: peopleHistory.slice(-100) }));
+    ws.send(JSON.stringify({ type: 'history', data: store.recentHistory(100) }));
+    ws.send(JSON.stringify({ type: 'settings', data: store.settings }));
     if (lastFfmpegError) {
         ws.send(JSON.stringify({ type: 'ffmpeg_error', data: lastFfmpegError }));
     }
@@ -481,7 +490,7 @@ wss.on('connection', (ws) => {
             if (data.type === 'ping') {
                 ws.send(JSON.stringify({ type: 'pong' }));
             } else if (data.type === 'get_history') {
-                ws.send(JSON.stringify({ type: 'history', data: peopleHistory.slice(-100) }));
+                ws.send(JSON.stringify({ type: 'history', data: store.recentHistory(100) }));
             }
         } catch (e) {
             console.error('Error parsing message:', e.message);
@@ -541,9 +550,7 @@ app.get('/api/counts', (req, res) => {
 });
 
 app.post('/api/reset-counts', (req, res) => {
-    enterCount = 0;
-    exitCount = 0;
-    peopleHistory = [];
+    store.resetCounts();
     trackedPeople.clear();
     broadcast({ type: 'counts', data: countsPayload() });
     broadcast({ type: 'history', data: [] });
@@ -551,17 +558,55 @@ app.post('/api/reset-counts', (req, res) => {
 });
 
 app.get('/api/history', (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 50, CONFIG.HISTORY_LIMIT);
-    res.json(peopleHistory.slice(-limit));
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 5000);
+    res.json(store.recentHistory(limit));
 });
 
+app.get('/api/history.csv', (req, res) => {
+    res.set('Content-Disposition', `attachment; filename="cctv-history-${dateKey()}.csv"`);
+    res.type('text/csv').send(store.historyCsv());
+});
+
+app.get('/api/stats', (req, res) => {
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : dateKey();
+    res.json(store.stats(date));
+});
+
+// ---- Settings shared by every viewer ----
+app.get('/api/settings', (req, res) => {
+    res.json(store.settings);
+});
+
+app.post('/api/settings', (req, res) => {
+    const body = req.body || {};
+    const patch = {};
+    if ('capacity' in body) {
+        const n = body.capacity === null || body.capacity === '' ? null : Number(body.capacity);
+        if (n !== null && (!Number.isInteger(n) || n < 1 || n > 100000)) {
+            return res.status(400).json({ success: false, message: 'Capacity must be a whole number from 1 to 100000, or empty to turn it off' });
+        }
+        patch.capacity = n;
+    }
+    if ('dailyReset' in body) {
+        patch.dailyReset = Boolean(body.dailyReset);
+    }
+    const settings = store.updateSettings(patch);
+    broadcast({ type: 'settings', data: settings });
+    res.json({ success: true, settings });
+});
+
+// ---- Zones ----
 function isValidZone(zone) {
     return zone && ['x1', 'y1', 'x2', 'y2'].every((k) => Number.isFinite(zone[k]))
         && zone.x2 > zone.x1 && zone.y2 > zone.y1;
 }
 
+function zonesPayload() {
+    return { enter: ZONES.ENTER, exit: ZONES.EXIT, defaults: { enter: DEFAULT_ZONES.ENTER, exit: DEFAULT_ZONES.EXIT } };
+}
+
 app.get('/api/zones', (req, res) => {
-    res.json({ enter: ZONES.ENTER, exit: ZONES.EXIT });
+    res.json(zonesPayload());
 });
 
 app.post('/api/calibrate-zones', (req, res) => {
@@ -572,13 +617,15 @@ app.post('/api/calibrate-zones', (req, res) => {
             message: 'Expected { enter: {x1,y1,x2,y2}, exit: {x1,y1,x2,y2} } with x2 > x1 and y2 > y1'
         });
     }
-    // Zones are sent with every frame, so the detector picks them up immediately
-    // OpenCV needs integer pixel coordinates
+    // OpenCV needs integer pixel coordinates. Zones are sent with every frame,
+    // so the detector picks them up immediately; they are also saved to disk.
     const toZone = (z) => ({ x1: Math.round(z.x1), y1: Math.round(z.y1), x2: Math.round(z.x2), y2: Math.round(z.y2) });
     ZONES.ENTER = toZone(enter);
     ZONES.EXIT = toZone(exit);
+    store.setZones({ ENTER: ZONES.ENTER, EXIT: ZONES.EXIT });
     trackedPeople.clear();
-    res.json({ success: true, message: 'Zones calibrated successfully', zones: { enter: ZONES.ENTER, exit: ZONES.EXIT } });
+    broadcast({ type: 'zones', data: zonesPayload() });
+    res.json({ success: true, message: 'Zones saved', zones: zonesPayload() });
 });
 
 app.get('/api/test-connection', (req, res) => {
@@ -592,7 +639,7 @@ app.get('/api/test-connection', (req, res) => {
 
     const testProcess = spawn('ffmpeg', [
         '-loglevel', 'error',
-        '-rtsp_transport', rtspConfig.rtsp_transport || 'tcp',
+        ...(IS_RTSP ? ['-rtsp_transport', rtspConfig.rtsp_transport || 'tcp'] : []),
         '-i', RTSP_URL,
         '-t', '2',
         '-f', 'null',
@@ -620,23 +667,41 @@ app.get('/api/test-connection', (req, res) => {
     });
 });
 
+// ========== DAILY RESET ==========
+setInterval(() => {
+    if (store.checkDailyReset()) {
+        console.log('🌙 Midnight: counters reset (daily reset is on)');
+        trackedPeople.clear();
+        broadcast({ type: 'counts', data: countsPayload() });
+    }
+}, 30000).unref();
+
 // ========== START ==========
 server.listen(PORT, BIND_ADDRESS, () => {
     console.log('\n=================================');
     console.log('🚀 CCTV Monitor running');
     console.log(`📍 Dashboard:  http://localhost:${PORT}`);
-    console.log(`📡 WebSocket:  ws://localhost:${PORT}`);
-    console.log(`🎥 RTSP:       ${maskRtspUrl(RTSP_URL)}`);
+    console.log(`🎥 Source:     ${maskRtspUrl(RTSP_URL)}`);
+    console.log(`🔐 Login:      ${auth.enabled ? 'password required' : 'off (set dashboard_password to enable)'}`);
+    console.log(`💾 Data:       ${DATA_DIR}`);
     console.log('=================================');
     console.log(`📊 Enter zone: ${JSON.stringify(ZONES.ENTER)}`);
     console.log(`📊 Exit zone:  ${JSON.stringify(ZONES.EXIT)}`);
-    console.log('   People walking in should cross the GREEN zone,');
-    console.log('   people leaving should cross the RED zone.');
+    console.log('   Adjust them with the "Zones" button on the dashboard.');
     console.log('=================================\n');
+});
+
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use. Is the server already running? Try: PORT=${PORT + 1} npm start`);
+        process.exit(1);
+    }
+    throw err;
 });
 
 function shutdown() {
     console.log('\n🛑 Shutting down gracefully...');
+    store.saveNow();
     stopStream();
     wss.close();
     server.close(() => process.exit(0));

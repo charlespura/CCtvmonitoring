@@ -1,7 +1,9 @@
 {
+  "camera_name": "Tapo TC70",
   "camera_ip": "192.168.1.100",
   "rtsp_port": 554,
   "rtsp_username": "your-camera-account-username",
   "rtsp_password": "your-camera-account-password",
-  "stream_quality": "stream1"
+  "stream_quality": "stream1",
+  "dashboard_password": ""
 }
