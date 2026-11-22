@@ -24,25 +24,34 @@
 2. [What you need](#-what-you-need)
 3. [Setup, step by step](#-setup-step-by-step)
 4. [Using the dashboard](#-using-the-dashboard)
-5. [Calibrating the counting zones](#-calibrating-the-counting-zones)
-6. [Troubleshooting](#-troubleshooting)
-7. [Configuration reference](#%EF%B8%8F-configuration-reference)
-8. [API](#-api)
-9. [How it works](#-how-it-works)
-10. [Security](#-security)
-11. [Project structure](#-project-structure)
+5. [Setting up the counting zones](#-setting-up-the-counting-zones)
+6. [Capacity alerts, daily reset and notifications](#-capacity-alerts-daily-reset-and-notifications)
+7. [Password protection](#-password-protection)
+8. [Your data](#-your-data)
+9. [Troubleshooting](#-troubleshooting)
+10. [Configuration reference](#%EF%B8%8F-configuration-reference)
+11. [API](#-api)
+12. [How it works](#-how-it-works)
+13. [Security](#-security)
+14. [Project structure](#-project-structure)
 
 ---
 
 ## ✨ What it does
 
 - 🎥 **Live video in any browser.** Works on a computer, phone or tablet, with no app or plugin.
-- 👥 **People counting.** Counts people who cross the **green ENTER** zone or the **red EXIT** zone.
-- 📊 **Live counters.** Shows who is *currently inside*, *total entered*, *total exited* and *in view now*.
-- 🕒 **Activity feed.** Every enter and exit appears with its time, and you can filter by In or Out.
+- 👥 **People counting.** Counts people who cross the **ENTER** zone (aqua) or the **EXIT** zone (orange).
+- 🖱️ **Visual zone editor.** Drag and resize the counting zones right on the video, and they apply instantly.
+- 📊 **Traffic by hour.** A chart of people entering and leaving each hour, with the busiest hour, previous days and a table view.
+- 🚨 **Capacity alerts.** Set a maximum number of people, and the dashboard shows a red alert (plus an optional sound or desktop notification) when it's exceeded.
+- 🔐 **Optional password login**, so only people who know the password can watch the camera.
+- 💾 **Nothing is lost on restart.** Counts, history, zones and settings are saved automatically.
+- 🌙 **Daily auto-reset** at midnight (optional), and **CSV export** of the history for Excel or Google Sheets.
+- 🕒 **Live activity feed** with In and Out filters.
 - 📸 **Snapshots, fullscreen, dark and light themes**, and keyboard shortcuts.
 - 🔁 **Auto-reconnect.** If the camera or Wi‑Fi drops, it recovers on its own.
 - 💬 **Clear error messages.** For example, *"Camera rejected the login"* tells you exactly what to fix.
+- ♿ **Colour-blind friendly.** Enter and exit use an aqua/orange pair that stays distinguishable for the most common types of colour blindness.
 
 ---
 
@@ -145,16 +154,19 @@ Open **`rtsp-config.json`** in any text editor and fill in your values from Step
 
 ```json
 {
+  "camera_name": "Tapo TC70",
   "camera_ip": "192.168.1.100",
   "rtsp_port": 554,
   "rtsp_username": "your-camera-account-username",
   "rtsp_password": "your-camera-account-password",
-  "stream_quality": "stream1"
+  "stream_quality": "stream1",
+  "dashboard_password": ""
 }
 ```
 
 - `stream1` = high quality (1080p); `stream2` = low quality (360p). Use `stream2` if your computer is slow.
 - Type the password exactly as you set it. Special characters like `@` or `#` are fine, because the app handles them.
+- `dashboard_password` is optional. Set it to require a login before anyone can view the dashboard (see [Password protection](#-password-protection)). Leave it `""` for no login.
 
 > 🔒 `rtsp-config.json` is listed in `.gitignore`, so your password **stays on your computer** and is never uploaded to GitHub.
 
@@ -193,7 +205,9 @@ You should see:
 ```
 🚀 CCTV Monitor running
 📍 Dashboard:  http://localhost:3000
-🎥 RTSP:       rtsp://****:****@192.168.1.100:554/stream1
+🎥 Source:     rtsp://****:****@192.168.1.100:554/stream1
+🔐 Login:      off (set dashboard_password to enable)
+💾 Data:       /path/to/CCtvmonitoring/data
 ```
 
 Keep this terminal window open while you use the dashboard. To stop the server, press **Ctrl + C**.
@@ -213,17 +227,24 @@ macOS: `ipconfig getifaddr en0` · Windows: `ipconfig` (look for *IPv4 Address*)
 
 After a few seconds the status badge at the top turns green and shows **● Live**. 🎉
 
+### Step 9: Set your counting zones
+
+Click **Zones** (or press <kbd>Z</kbd>) and drag the boxes over your doorway. See [Setting up the counting zones](#-setting-up-the-counting-zones).
+
+> 💡 **No camera yet?** You can try everything with any video file: `RTSP_URL=/path/to/video.mp4 npm start`. The video plays on a loop.
+
 ---
 
 ## 🖥️ Using the dashboard
 
 | Area | What it shows |
 | --- | --- |
-| **Currently inside** | People who entered minus people who exited |
+| **Currently inside** | People who entered minus people who exited. With a capacity limit set, it also shows a progress bar like *3 of 25 max* |
 | **Entered / Exited** | Totals since the last reset |
 | **In view now** | People detected in the current frame, plus the frames processed per second |
-| **Live view** | Camera video with the ENTER zone (green), EXIT zone (red) and a box around each detected person |
-| **Activity** | Every enter and exit with its time. Filter with **All / In / Out** |
+| **Live view** | Camera video with the ENTER zone (aqua), EXIT zone (orange) and a box around each detected person |
+| **Traffic by hour** | Entered (bars going **up**) and exited (bars going **down**) for each hour of the day. Hover over a bar for exact numbers, use **‹ ›** to see previous days, or switch to **Table** |
+| **Activity** | Every enter and exit with its time. Filter with **All / In / Out**; **⬇** downloads everything as CSV |
 | **Camera** | Model, IP, stream quality, number of viewers, server uptime |
 
 **Buttons and keyboard shortcuts**
@@ -232,40 +253,92 @@ After a few seconds the status badge at the top turns green and shows **● Live
 | --- | :---: | --- |
 | 📷 Snapshot | <kbd>S</kbd> | Saves the current frame as a PNG |
 | ⛶ Fullscreen | <kbd>F</kbd> | Shows the video in fullscreen |
+| ▭▭ Zones | <kbd>Z</kbd> | Opens the zone editor |
 | ☰ Legend | <kbd>L</kbd> | Shows or hides the zone legend |
 | 🔄 Reconnect | <kbd>R</kbd> | Reconnects to the stream |
 | 🌗 Theme | <kbd>T</kbd> | Switches between dark and light mode |
-| ↺ Reset counts | | Sets all counters to zero (asks for confirmation first) |
+| ⚙️ Settings | <kbd>,</kbd> | Capacity limit, daily reset, sound, notifications |
+| ↺ Reset counts | | Sets the counters to zero (asks for confirmation first). Hourly statistics are kept |
 
 **Status badge:** 🟢 **Live** = working · 🔵 **Connecting / Waiting for video** = starting up · 🟡 **No signal / Stalled** = the camera has a problem (the message on the video tells you what) · 🔴 **Offline** = the server isn't running.
 
 ---
 
-## 🎯 Calibrating the counting zones
+## 🎯 Setting up the counting zones
 
 A person is counted when they **move into** a zone:
 
-- Moving into the **green ENTER** zone counts as **+1 entered**
-- Moving into the **red EXIT** zone counts as **+1 exited**
+- Moving into the **ENTER** zone (aqua) counts as **+1 entered**
+- Moving into the **EXIT** zone (orange) counts as **+1 exited**
 
 By default, the left half of the picture is ENTER and the right half is EXIT. Every camera view is different, so adjust the zones to match how people walk through your doorway.
 
-Zones are rectangles in pixels on a **640 px wide** picture: `x` runs from left (0) to right (640), and `y` runs from top (0) to bottom (about 360). Each zone uses `x1,y1` for its top-left corner and `x2,y2` for its bottom-right corner.
+**To edit the zones:**
 
-**Try zones live, without restarting:**
-
-```bash
-curl -X POST http://localhost:3000/api/calibrate-zones \
-  -H "Content-Type: application/json" \
-  -d '{"enter":{"x1":0,"y1":150,"x2":320,"y2":350},"exit":{"x1":320,"y1":150,"x2":640,"y2":350}}'
-```
-
-The new zones appear on the video right away. Once you're happy with them, make them permanent by editing `ZONES` near the top of [`stream-server.js`](stream-server.js).
+1. Click **Zones** under the video (or press <kbd>Z</kbd>).
+2. **Drag a box** to move it. **Drag a corner** to resize it.
+   With the keyboard: <kbd>Tab</kbd> selects a box, the arrow keys move it, and <kbd>Shift</kbd> + arrows resize it.
+3. **Swap** exchanges ENTER and EXIT, which is useful if the counts come out reversed. **Defaults** restores the original layout.
+4. Click **Save zones**. Counting uses the new zones immediately, and they are remembered after a restart.
 
 **Tips for accurate counting**
 - Mount the camera so people are seen **full-body** (head to feet), from a moderate height.
 - Good, even lighting improves detection a lot.
 - Place the two zones so people **cross from one into the other** as they walk through the door.
+- If *Entered* goes up when people leave, click **Swap**.
+
+---
+
+## 🚨 Capacity alerts, daily reset and notifications
+
+Open **⚙️ Settings** (top right, or press <kbd>,</kbd>).
+
+**For everyone** (saved on the server and shared by every viewer):
+
+| Setting | What it does |
+| --- | --- |
+| **Capacity limit** | The maximum number of people allowed inside. As the count approaches the limit, the meter turns amber at 80%. When the limit is exceeded, a red **Over capacity** banner appears for every viewer. Leave it empty to turn it off. |
+| **Reset counters every night at midnight** | Entered, exited and occupancy start from zero each day. The hourly chart history is kept. |
+
+**This browser only** (each person chooses for themselves):
+
+| Setting | What it does |
+| --- | --- |
+| **Play a sound** | A short chime when someone enters (rising) or exits (falling), and a triple beep for capacity alerts |
+| **Desktop notifications** | A system notification for capacity alerts, and for enters/exits while the tab is in the background. Your browser asks for permission the first time |
+
+---
+
+## 🔐 Password protection
+
+By default, anyone on your network who opens the dashboard can watch the camera. To require a password, add it to `rtsp-config.json`:
+
+```json
+"dashboard_password": "choose-a-strong-password"
+```
+
+Restart the server (`npm start`). Everyone then sees a **sign-in page** first.
+
+- A sign-in lasts 30 days on that device. **Sign out** with the ⎋ button in the top right.
+- Changing the password signs everyone out.
+- After 10 wrong passwords, that device is blocked for 15 minutes, which stops password guessing.
+- This password is separate from your camera's password, and it stays on your computer because `rtsp-config.json` is git-ignored.
+
+---
+
+## 💾 Your data
+
+Everything the dashboard remembers is saved in the **`data/`** folder next to the project:
+
+| File | Contains |
+| --- | --- |
+| `data/state.json` | Counts, the last 5,000 events, hourly statistics (about 2 months), zones and shared settings |
+| `data/session-secret` | Random key used to sign logins (do not share it) |
+
+- The data is saved automatically, so it survives restarts and crashes.
+- **Back up:** copy the `data/` folder. **Start fresh:** stop the server and delete `data/`.
+- **Export:** the **⬇** button in Activity downloads `cctv-history-YYYY-MM-DD.csv`, which opens in Excel or Google Sheets.
+- `data/` is git-ignored, so it is never uploaded to GitHub.
 
 ---
 
@@ -278,7 +351,11 @@ The new zones appear on the video right away. Once you're happy with them, make 
 | **"FFmpeg is not installed"** | Install FFmpeg (Step 2) and check that `ffmpeg -version` works. |
 | Video is black or blank | Turn off **Privacy Mode** in the Tapo app. |
 | **"Can't reach the stream server"** in the browser | The server isn't running. Run `npm start` and keep the terminal open. |
-| Video works but nobody is counted | [Calibrate the zones](#-calibrating-the-counting-zones). Make sure people are visible full-body. |
+| Video works but nobody is counted | [Set up the zones](#-setting-up-the-counting-zones) with the **Zones** button. Make sure people are visible full-body. |
+| Entered and Exited are reversed | Open **Zones**, click **Swap**, then **Save zones**. |
+| Forgot the dashboard password | Change `dashboard_password` in `rtsp-config.json` and restart the server. |
+| "Too many attempts" on the sign-in page | Wait 15 minutes, or restart the server. |
+| Desktop notifications don't appear | Allow notifications for the site in your browser's settings (and in macOS/Windows notification settings). |
 | `ModuleNotFoundError: No module named 'cv2'` | Run `pip3 install -r requirements.txt`. If you have several Pythons, start with `PYTHON_BIN=/path/to/python3 npm start`. |
 | Windows: Python not found | Start with `$env:PYTHON_BIN="python"; npm start` in PowerShell. |
 | `EADDRINUSE` / port 3000 already in use | Another program is using the port. Start on a different one: `PORT=3001 npm start` (Windows: `$env:PORT=3001; npm start`). |
@@ -306,6 +383,7 @@ curl http://localhost:3000/api/test-connection
 | `stream_quality` | `stream1` | `stream1` = 1080p, `stream2` = 360p |
 | `camera_name` | `Tapo TC70` | Name shown on the dashboard |
 | `rtsp_transport` | `tcp` | `tcp` (most reliable) or `udp` |
+| `dashboard_password` | `""` (off) | Password required to open the dashboard |
 
 ### Environment variables (optional)
 
@@ -315,7 +393,9 @@ These override `rtsp-config.json`. They are handy for services and Docker.
 | --- | --- | --- |
 | `PORT` | `3000` | Port for the dashboard, API and WebSocket |
 | `BIND_ADDRESS` | `0.0.0.0` | `127.0.0.1` = only this computer can open the dashboard; `0.0.0.0` = devices on your network can too |
-| `RTSP_URL` | — | Full RTSP URL; overrides every camera setting |
+| `RTSP_URL` | — | Full RTSP URL; overrides every camera setting. Can also be a **video file** for testing |
+| `DASHBOARD_PASSWORD` | — | Same as `dashboard_password` |
+| `DATA_DIR` | `./data` | Folder where counts, history, zones and settings are saved |
 | `RTSP_HOST`, `RTSP_PORT`, `RTSP_USERNAME`, `RTSP_PASSWORD`, `RTSP_PATH` | — | Individual camera settings |
 | `RTSP_TRANSPORT` | `tcp` | `tcp` or `udp` |
 | `CAMERA_NAME` | `Tapo TC70` | Name shown on the dashboard |
@@ -338,13 +418,25 @@ PORT=8080 CAMERA_NAME="Front Door" npm start
 | --- | --- | --- |
 | `GET` | `/api/status` | Stream health, camera info (password hidden), counts, uptime |
 | `GET` | `/api/counts` | `{ current, enter, exit, tracked, timestamp }` |
-| `GET` | `/api/history?limit=50` | Recent enter and exit events |
-| `POST` | `/api/reset-counts` | Resets counters and history for every viewer |
-| `GET` | `/api/zones` | Current ENTER and EXIT zones |
-| `POST` | `/api/calibrate-zones` | Sets new zones: `{ "enter": {x1,y1,x2,y2}, "exit": {x1,y1,x2,y2} }` |
+| `GET` | `/api/history?limit=50` | Recent enter and exit events (up to 5,000) |
+| `GET` | `/api/history.csv` | All saved events as a CSV download |
+| `GET` | `/api/stats?date=YYYY-MM-DD` | Hourly enter/exit counts, totals and busiest hour for a day (default: today) |
+| `POST` | `/api/reset-counts` | Resets counters and the activity feed for every viewer (hourly stats are kept) |
+| `GET` | `/api/zones` | Current and default ENTER/EXIT zones |
+| `POST` | `/api/calibrate-zones` | Saves new zones: `{ "enter": {x1,y1,x2,y2}, "exit": {x1,y1,x2,y2} }` |
+| `GET` / `POST` | `/api/settings` | Shared settings: `{ "capacity": 25, "dailyReset": true }` |
 | `GET` | `/api/test-connection` | Tries to open the camera stream for 2 seconds |
+| `GET` | `/api/session` | `{ authEnabled, authenticated }` |
+| `POST` | `/api/login` / `/api/logout` | Sign in with `{ "password": "…" }` / sign out |
 
-The server sends these **WebSocket** messages on `ws://<host>:3000`: `frame`, `counts`, `history`, `event`, `ffmpeg_error`, `pong`.
+When a dashboard password is set, every endpoint except `session` and `login` requires the sign-in cookie. From the command line:
+
+```bash
+curl -c cookies.txt -H "Content-Type: application/json" -d '{"password":"your-password"}' http://localhost:3000/api/login
+curl -b cookies.txt http://localhost:3000/api/stats
+```
+
+The server sends these **WebSocket** messages on `ws://<host>:3000`: `frame`, `counts`, `history`, `event`, `settings`, `zones`, `ffmpeg_error`, `pong`.
 
 ---
 
@@ -362,7 +454,7 @@ flowchart LR
 1. **FFmpeg** connects to the camera and outputs 2 small JPEG frames per second.
 2. **Node.js** sends each frame to the **Python** detector.
 3. **OpenCV** finds the people in the frame and draws the zones and boxes.
-4. **Node.js** follows each person across frames. When someone moves into a zone, it counts them and pushes the update to every open dashboard instantly.
+4. **Node.js** follows each person across frames. When someone moves into a zone, it counts them, saves the event to `data/state.json` and pushes the update to every open dashboard instantly.
 
 The camera pipeline only runs while at least one dashboard is open, which saves CPU and network.
 
@@ -370,17 +462,18 @@ The camera pipeline only runs while at least one dashboard is open, which saves 
 
 ## 🔒 Security
 
-**Safe to publish:** this repository contains **no passwords or personal camera details**. Your credentials live only in `rtsp-config.json`, which git ignores.
+**Safe to publish:** this repository contains **no passwords or personal camera details**. Your credentials live only in `rtsp-config.json`, and your counts, history and login key live only in `data/`. Git ignores both.
 
 The server is built for a **home or office network**:
 
 - ✅ Camera passwords are never sent to the browser and are hidden (`****`) in logs and error messages.
-- ✅ Only the `public/` folder is served, so config files cannot be downloaded.
+- ✅ Only the `public/` folder is served, so config and data files cannot be downloaded.
 - ✅ Other websites open in your browser **cannot** connect to the dashboard or watch your camera. Cross-site requests and DNS-rebinding attempts are blocked.
-- ⚠️ There is **no login page**. Anyone on the **same Wi‑Fi** who knows your computer's IP can view the dashboard. To keep it on this computer only, start with `BIND_ADDRESS=127.0.0.1 npm start`.
-- ❌ **Do not** open port 3000 to the internet with router port forwarding. For remote viewing, use a VPN such as [Tailscale](https://tailscale.com), which works out of the box, or a reverse proxy that requires a login.
+- ✅ **Optional password login** ([how to enable](#-password-protection)). Sessions are HttpOnly, SameSite=Strict signed cookies, and repeated wrong passwords are rate-limited.
+- ⚠️ **Without** a dashboard password, anyone on the **same Wi‑Fi** who knows your computer's IP can view the dashboard. Set `dashboard_password`, or keep it on this computer only with `BIND_ADDRESS=127.0.0.1 npm start`.
+- ❌ **Do not** open port 3000 to the internet with router port forwarding, even with a password, because the connection is plain HTTP. For remote viewing, use a VPN such as [Tailscale](https://tailscale.com), which works out of the box, or an HTTPS reverse proxy.
 
-**Before you commit:** run `git status` and make sure `rtsp-config.json` is **not** listed.
+**Before you commit:** run `git status` and make sure `rtsp-config.json` and `data/` are **not** listed.
 
 ---
 
@@ -389,9 +482,18 @@ The server is built for a **home or office network**:
 ```
 CCtvmonitoring/
 ├── public/                    # The dashboard (HTML, CSS, JS)
-│   ├── index.html
+│   ├── index.html             # Dashboard page
+│   ├── login.html             # Sign-in page (used when a password is set)
 │   ├── css/style.css
-│   └── js/app.js
+│   └── js/
+│       ├── app.js             # Dashboard logic (stream, counters, settings, alerts)
+│       ├── chart.js           # Traffic-by-hour chart
+│       ├── zone-editor.js     # Drag-and-drop zone editor
+│       └── login.js
+├── lib/
+│   ├── store.js               # Saves counts, history, hourly stats, zones, settings
+│   └── auth.js                # Optional password login
+├── data/                      # Created automatically: your saved data (git-ignored)
 ├── stream-server.js           # Web server, camera pipeline, people tracking, API
 ├── people_detector.py         # OpenCV person detector (run by the server)
 ├── cctvmonitoring.php         # Optional XAMPP entry page → forwards to the dashboard
