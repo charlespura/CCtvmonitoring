@@ -66,8 +66,8 @@ function buildRtspUrl(config) {
     return `rtsp://${auth}${config.camera_ip}:${config.rtsp_port}/${config.stream_quality}`;
 }
 
-function maskRtspUrl(url) {
-    return url.replace(/\/\/([^/@]+)@/, '//****:****@');
+function maskRtspUrl(text) {
+    return String(text).replace(/(rtsps?:\/\/)[^/@\s]+@/gi, '$1****:****@');
 }
 
 const rtspConfig = loadRtspConfig();
@@ -104,6 +104,7 @@ let ffmpegProcess = null;
 let pythonProcess = null;
 let ffmpegStopTimer = null;
 let lastFfmpegError = null;
+let restartDelay = 3000;
 const clients = new Set();
 
 let enterCount = 0;
@@ -244,6 +245,7 @@ function startPython() {
                 if (result.people) updatePeopleCount(result.people);
                 if (result.frame && clients.size > 0) {
                     lastFrameAt = Date.now();
+                    restartDelay = 3000;
                     broadcast({
                         type: 'frame',
                         data: result.frame,
@@ -328,7 +330,8 @@ function startFFmpegStream() {
     });
 
     ffmpeg.stderr.on('data', (data) => {
-        data.toString().split('\n').forEach((line) => {
+        // FFmpeg echoes the input URL in errors — mask credentials before logging/broadcasting
+        maskRtspUrl(data.toString()).split('\n').forEach((line) => {
             const output = line.trim();
             const lower = output.toLowerCase();
             if (!output || lower.includes('deprecated pixel format')) return;
@@ -352,10 +355,13 @@ function startFFmpegStream() {
                 pythonProcess = null;
             }
             if (clients.size > 0) {
-                console.log('Restarting FFmpeg in 3 seconds...');
+                // Back off while the camera stays unreachable (3s → 6s → … → 30s)
+                const delay = restartDelay;
+                restartDelay = Math.min(restartDelay * 2, 30000);
+                console.log(`Restarting FFmpeg in ${delay / 1000} seconds...`);
                 setTimeout(() => {
                     if (clients.size > 0 && !ffmpegProcess) startFFmpegStream();
-                }, 3000);
+                }, delay);
             }
         }
     });
@@ -542,7 +548,7 @@ app.get('/api/test-connection', (req, res) => {
     }, rtspConfig.rtsp_timeout_ms || 5000);
 
     testProcess.stderr.on('data', (data) => {
-        const output = data.toString().trim();
+        const output = maskRtspUrl(data.toString()).trim();
         if (output) lastError = output;
     });
     testProcess.on('close', (code) => {

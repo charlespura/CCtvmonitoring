@@ -61,6 +61,23 @@ flowchart LR
 
 On Windows or Linux, install the same tools with your package manager. FFmpeg must be on your `PATH`.
 
+## 📷 Tapo camera setup (do this first)
+
+Tapo cameras keep RTSP **turned off** until you enable it in the Tapo app:
+
+1. **Turn on Third-Party Compatibility.** In the Tapo app, go to **Me** → **Tapo Lab** → **Third-Party Compatibility** and turn it **On**. Newer firmware needs this before RTSP will work.
+2. **Create a Camera Account.** Open the camera → ⚙️ **Settings** → **Advanced Settings** → **Camera Account**, then set a username and password. These are your `rtsp_username` and `rtsp_password`.
+3. **Find the camera's IP address.** In the camera's settings, open **Device Info** → **IP Address**. Use it as `camera_ip`.
+4. **Turn off Privacy Mode** on the camera, or the stream will be blank.
+
+> 💡 **Tip:** In your router settings, reserve a fixed IP address for the camera (a "DHCP reservation"). Otherwise the IP can change after a restart and the dashboard will show *Camera is unreachable*.
+
+Check that RTSP is open (replace the IP with your camera's):
+
+```bash
+nc -z -G 3 192.168.1.100 554 && echo "RTSP is open" || echo "RTSP is closed. Repeat steps 1–2"
+```
+
 ## 🚀 Quick start
 
 ```bash
