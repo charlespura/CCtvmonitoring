@@ -3,14 +3,56 @@ const path = require('path');
 const { spawn } = require('child_process');
 const WebSocket = require('ws');
 const http = require('http');
-const cors = require('cors');
 const fs = require('fs');
+
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const BIND_ADDRESS = process.env.BIND_ADDRESS || '0.0.0.0';
+const listFromEnv = (name) => (process.env[name] || '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+const ALLOWED_HOSTS = listFromEnv('ALLOWED_HOSTS');
+const ALLOWED_ORIGINS = listFromEnv('ALLOWED_ORIGINS');
+
+// ========== ACCESS CONTROL ==========
+// 1. Host check: only answer to localhost, private-network IPs and *.local names.
+//    Blocks DNS-rebinding attacks where a public domain is pointed at this machine.
+function isAllowedHost(hostHeader) {
+    if (!hostHeader) return false;
+    const hostname = hostHeader.toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+    if (ALLOWED_HOSTS.includes(hostname)) return true;
+    if (hostname === 'localhost' || hostname === '::1' || hostname.endsWith('.local')) return true;
+    const ip = hostname.match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+    if (!ip) return false;
+    const [a, b] = [Number(ip[1]), Number(ip[2])];
+    return a === 127 || a === 10
+        || (a === 192 && b === 168)
+        || (a === 172 && b >= 16 && b <= 31)
+        || (a === 100 && b >= 64 && b <= 127); // CGNAT range, e.g. Tailscale
+}
+
+// 2. Origin check: browsers send an Origin header; it must be this dashboard itself.
+//    Stops other websites you visit from streaming your camera via WebSocket
+//    (cross-site WebSocket hijacking) or calling the API on your behalf.
+//    Requests without an Origin (curl, scripts) are allowed.
+function isAllowedOrigin(origin, hostHeader) {
+    if (!origin) return true;
+    if (ALLOWED_ORIGINS.includes(origin.toLowerCase())) return true;
+    try {
+        return new URL(origin).host === String(hostHeader).toLowerCase();
+    } catch {
+        return false;
+    }
+}
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const wss = new WebSocket.Server({
+    server,
+    verifyClient: ({ origin, req }) => {
+        const ok = isAllowedHost(req.headers.host) && isAllowedOrigin(origin, req.headers.host);
+        if (!ok) console.warn(`🚫 Blocked WebSocket from origin=${origin || '-'} host=${req.headers.host || '-'}`);
+        return ok;
+    }
+});
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
 const STARTED_AT = Date.now();
 
@@ -94,8 +136,21 @@ const ZONES = {
 const pythonScriptPath = path.join(__dirname, 'people_detector.py');
 
 // ========== HTTP ==========
-app.use(cors());
-app.use(express.json());
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+    if (!isAllowedHost(req.headers.host)) {
+        return res.status(403).type('text').send('Forbidden: unknown host. Set ALLOWED_HOSTS to allow it.');
+    }
+    if (!isAllowedOrigin(req.headers.origin, req.headers.host)) {
+        console.warn(`🚫 Blocked ${req.method} ${req.path} from origin ${req.headers.origin}`);
+        return res.status(403).json({ success: false, message: 'Cross-origin request blocked' });
+    }
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('X-Frame-Options', 'DENY');
+    res.set('Referrer-Policy', 'no-referrer');
+    next();
+});
+app.use(express.json({ limit: '10kb' }));
 // Only the public/ folder is served — never the project root (it holds credentials).
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -518,8 +573,10 @@ app.post('/api/calibrate-zones', (req, res) => {
         });
     }
     // Zones are sent with every frame, so the detector picks them up immediately
-    ZONES.ENTER = { x1: enter.x1, y1: enter.y1, x2: enter.x2, y2: enter.y2 };
-    ZONES.EXIT = { x1: exit.x1, y1: exit.y1, x2: exit.x2, y2: exit.y2 };
+    // OpenCV needs integer pixel coordinates
+    const toZone = (z) => ({ x1: Math.round(z.x1), y1: Math.round(z.y1), x2: Math.round(z.x2), y2: Math.round(z.y2) });
+    ZONES.ENTER = toZone(enter);
+    ZONES.EXIT = toZone(exit);
     trackedPeople.clear();
     res.json({ success: true, message: 'Zones calibrated successfully', zones: { enter: ZONES.ENTER, exit: ZONES.EXIT } });
 });
@@ -564,7 +621,7 @@ app.get('/api/test-connection', (req, res) => {
 });
 
 // ========== START ==========
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, BIND_ADDRESS, () => {
     console.log('\n=================================');
     console.log('🚀 CCTV Monitor running');
     console.log(`📍 Dashboard:  http://localhost:${PORT}`);
