@@ -1,149 +1,144 @@
+#!/usr/bin/env python3
+"""
+People detector worker for the CCTV monitoring server.
 
-import cv2
-import sys
-import numpy as np
-import json
+Protocol (line-delimited JSON over stdin/stdout):
+  in : {"frame": "<base64 JPEG>", "zones": {"ENTER": {...}, "EXIT": {...}}}
+  out: {"people": [...], "frame": "<base64 annotated JPEG>", "count": N, "timestamp": "..."}
+       or {"error": "..."}
+
+An optional JSON config object can be passed as the first CLI argument, e.g.
+  python3 people_detector.py '{"DETECTION_CONFIDENCE": 0.3}'
+"""
+
 import base64
+import json
+import sys
 from datetime import datetime
 
-# Load pre-trained HOG descriptor for people detection
-hog = cv2.HOGDescriptor()
-hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+import cv2
+import numpy as np
 
-# Zone definitions
-enter_zone = {"x1":0,"y1":150,"x2":320,"y2":350}
-exit_zone = {"x1":320,"y1":150,"x2":640,"y2":350}
-config = {"FRAME_RATE":2,"PERSON_TIMEOUT":3000,"MOVEMENT_THRESHOLD":100,"DETECTION_CONFIDENCE":0.3,"STREAM_SCALE_WIDTH":640,"ZONE_BUFFER":20}
+DEFAULT_CONFIG = {
+    "DETECTION_CONFIDENCE": 0.3,  # Minimum HOG SVM weight to accept a detection
+    "STREAM_SCALE_WIDTH": 640,    # Frames are resized to this width before detection
+    "ZONE_BUFFER": 20,            # Extra pixels around each zone to reduce edge flicker
+}
 
-def draw_zones(frame):
-    # Draw enter zone (green) - semi-transparent
+DEFAULT_ZONES = {
+    "ENTER": {"x1": 0, "y1": 150, "x2": 320, "y2": 350},
+    "EXIT": {"x1": 320, "y1": 150, "x2": 640, "y2": 350},
+}
+
+# BGR colours
+GREEN = (94, 197, 34)
+RED = (68, 68, 239)
+AMBER = (36, 191, 251)
+
+
+def load_config():
+    config = dict(DEFAULT_CONFIG)
+    if len(sys.argv) > 1:
+        try:
+            config.update(json.loads(sys.argv[1]))
+        except json.JSONDecodeError as exc:
+            print(f"Invalid config argument, using defaults: {exc}", file=sys.stderr)
+    return config
+
+
+def draw_zone(frame, zone, color, label):
+    p1, p2 = (zone["x1"], zone["y1"]), (zone["x2"], zone["y2"])
     overlay = frame.copy()
-    cv2.rectangle(overlay, 
-                  (enter_zone['x1'], enter_zone['y1']), 
-                  (enter_zone['x2'], enter_zone['y2']), 
-                  (0, 255, 0), -1)
-    cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
-    
-    cv2.rectangle(frame, 
-                  (enter_zone['x1'], enter_zone['y1']), 
-                  (enter_zone['x2'], enter_zone['y2']), 
-                  (0, 255, 0), 2)
-    cv2.putText(frame, 'ENTER ZONE', 
-                (enter_zone['x1'], enter_zone['y1'] - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    
-    # Draw exit zone (red) - semi-transparent
-    overlay = frame.copy()
-    cv2.rectangle(overlay, 
-                  (exit_zone['x1'], exit_zone['y1']), 
-                  (exit_zone['x2'], exit_zone['y2']), 
-                  (0, 0, 255), -1)
-    cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
-    
-    cv2.rectangle(frame, 
-                  (exit_zone['x1'], exit_zone['y1']), 
-                  (exit_zone['x2'], exit_zone['y2']), 
-                  (0, 0, 255), 2)
-    cv2.putText(frame, 'EXIT ZONE', 
-                (exit_zone['x1'], exit_zone['y1'] - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-    
-    return frame
+    cv2.rectangle(overlay, p1, p2, color, -1)
+    cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
+    cv2.rectangle(frame, p1, p2, color, 2)
+    cv2.putText(frame, label, (zone["x1"] + 6, max(zone["y1"] - 8, 14)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
 
-def detect_people(frame_data):
-    try:
-        # Convert base64 to image
-        img_data = base64.b64decode(frame_data)
-        nparr = np.frombuffer(img_data, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if frame is None:
-            return {'error': 'Could not decode image'}
-        
-        # Resize frame for faster processing
-        height, width = frame.shape[:2]
-        target_width = config.get('STREAM_SCALE_WIDTH', 640)
-        scale = target_width / width
-        new_width = target_width
-        new_height = int(height * scale)
-        frame = cv2.resize(frame, (new_width, new_height))
-        
-        # Draw zones on frame
-        frame_with_zones = draw_zones(frame.copy())
-        
-        # Detect people
-        (rects, weights) = hog.detectMultiScale(
-            frame, 
-            winStride=(4, 4),
-            padding=(8, 8), 
-            scale=1.05
-        )
-        
-        people = []
-        zone_buffer = config.get('ZONE_BUFFER', 20)
-        
-        for i, (x, y, w, h) in enumerate(rects):
-            if weights[i] < config['DETECTION_CONFIDENCE']:
-                continue
-                
-            center_x = x + w // 2
-            center_y = y + h // 2
-            
-            # Check if in zones with buffer
-            in_enter = (enter_zone['x1'] - zone_buffer <= center_x <= enter_zone['x2'] + zone_buffer and 
-                       enter_zone['y1'] - zone_buffer <= center_y <= enter_zone['y2'] + zone_buffer)
-            in_exit = (exit_zone['x1'] - zone_buffer <= center_x <= exit_zone['x2'] + zone_buffer and 
-                      exit_zone['y1'] - zone_buffer <= center_y <= exit_zone['y2'] + zone_buffer)
-            
-            # Draw rectangle around person
-            if in_enter:
-                color = (0, 255, 0)  # Green for enter zone
-            elif in_exit:
-                color = (0, 0, 255)  # Red for exit zone
-            else:
-                color = (255, 255, 0)  # Yellow for elsewhere
-            
-            cv2.rectangle(frame_with_zones, (x, y), (x + w, y + h), color, 2)
-            cv2.putText(frame_with_zones, f'P{i} ({weights[i]:.2f})', (x, y - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-            
-            people.append({
-                'id': i,
-                'x': center_x,
-                'y': center_y,
-                'width': w,
-                'height': h,
-                'confidence': float(weights[i]),
-                'in_enter_zone': in_enter,
-                'in_exit_zone': in_exit
-            })
-        
-        # Convert frame back to base64 for sending to client
-        _, buffer = cv2.imencode('.jpg', frame_with_zones)
-        frame_base64 = base64.b64encode(buffer).decode('utf-8')
-        
-        return {
-            'people': people,
-            'frame': frame_base64,
-            'count': len(people),
-            'timestamp': datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        return {'error': str(e)}
 
-# Main loop
-while True:
-    try:
+def in_zone(cx, cy, zone, buffer):
+    return (zone["x1"] - buffer <= cx <= zone["x2"] + buffer
+            and zone["y1"] - buffer <= cy <= zone["y2"] + buffer)
+
+
+def detect_people(hog, frame_b64, zones, config):
+    img = np.frombuffer(base64.b64decode(frame_b64), np.uint8)
+    frame = cv2.imdecode(img, cv2.IMREAD_COLOR)
+    if frame is None:
+        return {"error": "Could not decode image"}
+
+    # Resize for faster processing (zone coordinates are in this scaled space)
+    height, width = frame.shape[:2]
+    target_width = int(config.get("STREAM_SCALE_WIDTH", 640))
+    if width != target_width:
+        frame = cv2.resize(frame, (target_width, int(height * target_width / width)))
+
+    annotated = frame.copy()
+    draw_zone(annotated, zones["ENTER"], GREEN, "ENTER")
+    draw_zone(annotated, zones["EXIT"], RED, "EXIT")
+
+    rects, weights = hog.detectMultiScale(frame, winStride=(4, 4), padding=(8, 8), scale=1.05)
+    weights = np.asarray(weights).reshape(-1)
+
+    people = []
+    buffer = int(config.get("ZONE_BUFFER", 20))
+    for (x, y, w, h), weight in zip(rects, weights):
+        if weight < config["DETECTION_CONFIDENCE"]:
+            continue
+
+        # Cast numpy types to plain Python types so json.dumps works
+        x, y, w, h = int(x), int(y), int(w), int(h)
+        cx, cy = x + w // 2, y + h // 2
+        entering = in_zone(cx, cy, zones["ENTER"], buffer)
+        exiting = in_zone(cx, cy, zones["EXIT"], buffer)
+
+        color = GREEN if entering else RED if exiting else AMBER
+        cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(annotated, f"{float(weight):.2f}", (x, max(y - 5, 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+
+        people.append({
+            "id": len(people),
+            "x": cx,
+            "y": cy,
+            "width": w,
+            "height": h,
+            "confidence": float(weight),
+            "in_enter_zone": entering,
+            "in_exit_zone": exiting,
+        })
+
+    ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        return {"error": "Could not encode annotated frame"}
+
+    return {
+        "people": people,
+        "frame": base64.b64encode(buf).decode("ascii"),
+        "count": len(people),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+def main():
+    config = load_config()
+    zones = DEFAULT_ZONES
+    hog = cv2.HOGDescriptor()
+    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+
+    while True:
         line = sys.stdin.readline()
         if not line:
             break
-            
-        data = json.loads(line)
-        result = detect_people(data['frame'])
-        print(json.dumps(result))
+        try:
+            message = json.loads(line)
+            zones = message.get("zones") or zones
+            result = detect_people(hog, message["frame"], zones, config)
+        except Exception as exc:  # keep the worker alive on bad frames
+            result = {"error": str(exc)}
+        sys.stdout.write(json.dumps(result) + "\n")
         sys.stdout.flush()
-        
-    except Exception as e:
-        print(json.dumps({'error': str(e)}))
-        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()
